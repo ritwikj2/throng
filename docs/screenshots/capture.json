@@ -1,0 +1,20 @@
+{
+  "population": 8,
+  "stage": "chorus",
+  "simulatedSeconds": 320,
+  "buildings": 4,
+  "sharedKnowledge": 105,
+  "screenshots": [
+    "colony.png",
+    "individual.png",
+    "memory.png",
+    "squash.png",
+    "connect-claude.png",
+    "mobile.png",
+    "beginning.png"
+  ],
+  "synthetic": true,
+  "provider": "local",
+  "paidModelCalls": 0,
+  "capturedAt": "2026-09-14T05:24:15.047Z"
+}

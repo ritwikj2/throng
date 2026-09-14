@@ -1,0 +1,50 @@
+{
+  "name": "throng",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A local artificial-life game inspired by Plaything, with individual memory and collective learning",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/run.mjs dev",
+    "start": "node scripts/run.mjs start",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "prettier --check \"{client,server,shared,tests,e2e,scripts}/**/*.{ts,tsx,css,mjs}\"",
+    "format": "prettier --write \"{client,server,shared,tests,e2e,scripts}/**/*.{ts,tsx,css,mjs}\"",
+    "test": "vitest run",
+    "test:e2e": "npm run build && node scripts/run.mjs e2e",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run build",
+    "export:source": "node scripts/export.mjs",
+    "test:watch": "vitest",
+    "screenshots": "npm run build && node --import tsx scripts/screenshots.mjs",
+    "check:claude": "node --disable-warning=ExperimentalWarning --import tsx scripts/check-claude.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "0.33.4",
+    "@anthropic-ai/sdk": "0.124.0",
+    "@phosphor-icons/react": "2.1.10",
+    "@radix-ui/react-dialog": "1.1.23",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "ws": "8.21.3",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.63.0",
+    "@types/node": "22.20.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@types/ws": "8.18.1",
+    "@vitejs/plugin-react": "4.7.0",
+    "prettier": "3.9.6",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3",
+    "vite": "6.4.3",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
