@@ -1,5 +1,6 @@
 import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { parseEnv } from "node:util";
 import { z } from "zod";
 import type { BrainConnectionInput } from "../shared/types";
 import { normalizeBrainURL, readBrainConfig, type BrainConfig } from "./cognition";
@@ -99,6 +100,22 @@ export type ConnectionInput = BrainConnectionInput;
 
 export class BrainConnectionError extends Error {}
 
+// Node's dotenv parser does not unescape JSON string literals. Choose a literal
+// representation that preserves the actual value, and reject before any model
+// call if the parser cannot represent it without changing bytes.
+function environmentValue(value: string): string {
+  const candidates = [`"${value}"`, `'${value}'`];
+  // An unmatched leading quote can consume a later line's closing quote.
+  if (!/^["'`]/.test(value)) candidates.push(value);
+  for (const candidate of candidates) {
+    const parsed = parseEnv(`VALUE=${candidate}\nTHRONG_VALUE_END=ok\n`);
+    if (parsed.VALUE === value && parsed.THRONG_VALUE_END === "ok") return candidate;
+  }
+  throw new BrainConnectionError(
+    "These settings contain quote characters that cannot be saved in .env.",
+  );
+}
+
 function connectionEnvironment(input: ConnectionInput): Record<string, string> {
   const result = connectionSchema.safeParse(input);
   if (!result.success)
@@ -131,6 +148,7 @@ function connectionEnvironment(input: ConnectionInput): Record<string, string> {
       values.AWS_REGION = selected.awsRegion;
       break;
   }
+  for (const value of Object.values(values)) environmentValue(value);
   return values;
 }
 
@@ -224,7 +242,7 @@ export async function persistBrainConnection(
     return !name || !Object.hasOwn(values, name);
   });
   const content = `${lines.join("\n").trimEnd()}\n${Object.entries(values)
-    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+    .map(([name, value]) => `${name}=${environmentValue(value)}`)
     .join("\n")}\n`;
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {

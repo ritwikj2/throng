@@ -188,6 +188,41 @@ describe("provider-independent brain connection", () => {
     expect(contents.match(/OPENAI_API_KEY=/g)).toHaveLength(1);
     if (process.platform !== "win32") expect((await stat(path)).mode & 0o777).toBe(0o600);
   });
+  it.each([
+    "FAKE\\COMPATIBLE_KEY",
+    'FAKE"COMPATIBLE_KEY',
+    "FAKE'COMPATIBLE_KEY",
+    'FAKE#COMPATIBLE"KEY',
+    `FAKE"AND'COMPATIBLE_KEY`,
+  ])("preserves supported custom credentials exactly through save and reload", async (apiKey) => {
+    const path = await temporaryEnvironment("PORT=8800\n");
+    const input: BrainConnectionInput = {
+      provider: "compatible",
+      model: "local-model:small",
+      baseURL: "http://127.0.0.1:11434/v1",
+      apiKey,
+    };
+    expect(connectionConfig(input).apiKey).toBe(apiKey);
+    await persistBrainConnection(path, input);
+    const restored = readBrainConfig(parseEnv(await readFile(path, "utf8")));
+    expect(restored.apiKey).toBe(apiKey);
+    expect(restored.configurationError).toBeNull();
+  });
+  it("rejects settings the environment parser cannot preserve before making a model request", async () => {
+    const decide = vi.fn(async () => validDecision());
+    await expect(
+      verifyBrainAccess(
+        {
+          provider: "compatible",
+          model: "local-model",
+          baseURL: "http://localhost:11434/v1",
+          apiKey: `"FAKE'KEY#tail`,
+        },
+        { client: { decide } },
+      ),
+    ).rejects.toThrow("cannot be saved");
+    expect(decide).not.toHaveBeenCalled();
+  });
   it("does not reuse a saved compatible-provider key when switching endpoints without a key", async () => {
     const path = await temporaryEnvironment(
       "COMPATIBLE_API_KEY=OLD_SERVER_SECRET\nCOMPATIBLE_BASE_URL=https://old.example/v1\n",
