@@ -1,0 +1,3 @@
+# Keep source bytes consistent across macOS, Linux, and Windows.
+* text=auto eol=lf
+*.png binary

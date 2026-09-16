@@ -22,6 +22,7 @@ const top = [
   "README.md",
   ".env.example",
   ".gitignore",
+  ".gitattributes",
   ".npmrc",
   ".prettierrc",
   "index.html",
