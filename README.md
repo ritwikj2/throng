@@ -11,8 +11,8 @@ Connect your own **Claude Sonnet 5** account to give individuals model-driven de
 Install **Node.js 22.13 or newer** from [nodejs.org](https://nodejs.org/en/download). On your Mac, open **Terminal** and run:
 
 ```sh
-git clone https://github.com/ritwikj2/elsewhere.git
-cd elsewhere
+git clone https://github.com/ritwikj2/throng.git
+cd throng
 npm ci
 npm run setup
 npm run build
