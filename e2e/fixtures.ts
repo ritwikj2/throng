@@ -1,7 +1,7 @@
 import { test as base, expect } from "@playwright/test";
 import { createApp } from "../server/app";
 import { createWorld } from "../server/simulation";
-import { readBrainConfig } from "../server/cognition";
+import { connectionConfig } from "../server/brain-connection";
 import type { MindDecision } from "../shared/types";
 
 export const test = base.extend<{ app: Awaited<ReturnType<typeof createApp>> }>({
@@ -12,15 +12,9 @@ export const test = base.extend<{ app: Awaited<ReturnType<typeof createApp>> }>(
       initialWorld: createWorld(2026, "Little beginning"),
       brainEnvironmentPath: false,
       verifyBrainConnection: async (input) => {
-        if (input.apiKey !== "FAKE_CLAUDE_BROWSER_TEST_KEY")
+        if (input.apiKey && input.apiKey !== "FAKE_PROVIDER_BROWSER_TEST_KEY")
           throw new Error("Fixture key required.");
-        return readBrainConfig({
-          THRONG_BRAIN: "anthropic",
-          THRONG_MODEL: "claude-sonnet-5",
-          ANTHROPIC_API_KEY: input.apiKey,
-          THRONG_CALLS_PER_MINUTE: "24",
-          THRONG_THINK_INTERVAL_SECONDS: "8",
-        });
+        return connectionConfig(input);
       },
       cognitionOptions: {
         budget: { attempts: [], inFlight: 0 },

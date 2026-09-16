@@ -13,7 +13,7 @@ async function clickCreature(page: Page, world: WorldState, point: Vec) {
   await canvas.click({ position: { x: pixel.x, y: pixel.y - 8 * view.scale } });
 }
 async function settings(page: Page) {
-  await page.getByRole("button", { name: /^Claude status:/ }).click();
+  await page.getByRole("button", { name: /^Brain status:/ }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
 }
 
@@ -112,20 +112,21 @@ test("squash requires a creature hit and leaves a witnessed loss", async ({ page
   );
 });
 
-test("Claude connection clears the key and an accepted AI plan moves a creature", async ({
+test("a chosen Anthropic model clears its key and an accepted plan moves a creature", async ({
   page,
   app,
 }) => {
   await page.goto(app.url);
   await settings(page);
-  await page.getByLabel("Anthropic API key").fill("FAKE_CLAUDE_BROWSER_TEST_KEY");
-  await page.getByRole("button", { name: "Connect Claude", exact: true }).click();
-  await expect(
-    page.getByText("Access verified. Live status will update from the server."),
-  ).toBeVisible();
-  await expect(page.getByLabel("Anthropic API key")).toHaveValue("");
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await page.getByLabel("API model ID").fill("claude-model-of-choice");
+  await page.getByLabel("API key", { exact: true }).fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await page.getByRole("button", { name: "Connect brain", exact: true }).click();
+  await expect(page.locator("#brain-connect-feedback")).toContainText("test decision passed");
+  await expect(page.getByLabel("API key", { exact: true })).toHaveValue("");
+  expect(app.scene().brain.model).toBe("claude-model-of-choice");
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(
-    "FAKE_CLAUDE_BROWSER_TEST_KEY",
+    "FAKE_PROVIDER_BROWSER_TEST_KEY",
   );
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByRole("button", { name: "Hatch the egg" }).click();
@@ -158,6 +159,7 @@ test("mobile controls and connection dialogs fit the viewport", async ({ page, a
   await expect(page.getByTestId("world-canvas")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await settings(page);
+  await page.getByLabel("Provider", { exact: true }).selectOption("compatible");
   const box = await page.getByRole("dialog").boundingBox();
   expect(box!.x).toBeGreaterThanOrEqual(0);
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
@@ -184,8 +186,111 @@ test("game, inspector, and connection settings avoid serious accessibility viola
     [],
   );
   await settings(page);
+  await page.getByLabel("Provider", { exact: true }).selectOption("compatible");
   const connection = await new AxeBuilder({ page }).analyze();
   expect(
     connection.violations.filter((v) => ["serious", "critical"].includes(v.impact ?? "")),
   ).toEqual([]);
+});
+
+test("OpenAI API model selection and offline switching preserve the existing creature", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.url);
+  await page.getByRole("button", { name: "Hatch the egg" }).click();
+  await page.getByRole("button", { name: "Pause world", exact: true }).click();
+  const worldId = app.state().id;
+  const creatureId = app.state().creatures[0]!.id;
+  await settings(page);
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  await page.getByLabel("API model ID").fill("codex-model-from-my-api-account");
+  await page.getByLabel("API key", { exact: true }).fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await expect(page.getByLabel(/Calls per minute/)).toHaveValue("24");
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/brain/connect"));
+  await page.getByRole("button", { name: "Connect brain", exact: true }).click();
+  expect((await sent).postDataJSON()).toEqual({
+    provider: "openai",
+    model: "codex-model-from-my-api-account",
+    apiKey: "FAKE_PROVIDER_BROWSER_TEST_KEY",
+    callsPerMinute: 24,
+  });
+  await expect(page.locator("#brain-connect-feedback")).toContainText("test decision passed");
+  await expect(page.getByTestId("brain-status")).toContainText("OpenAI API");
+  expect(app.scene().brain.model).toBe("codex-model-from-my-api-account");
+  expect(app.scene().brain.apiStyle).toBe("responses");
+  await page.getByLabel("Provider", { exact: true }).selectOption("local");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "Connect brain", exact: true }).click();
+  await expect(page.locator("#brain-connect-feedback")).toContainText("No model request was made");
+  expect(app.state().cognitionMode).toBe("local");
+  expect(app.state().id).toBe(worldId);
+  expect(app.state().creatures[0]!.id).toBe(creatureId);
+});
+
+test("compatible endpoints use explicit protocol and clear keys before switching destinations", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.url);
+  await settings(page);
+  await page.getByLabel("Provider", { exact: true }).selectOption("anthropic");
+  await page.getByLabel("API key", { exact: true }).fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await page.getByLabel("Provider", { exact: true }).selectOption("compatible");
+  await expect(page.locator("#brain-api-key")).toHaveValue("");
+  await page.getByLabel("API model ID").fill("local-model:small");
+  await page.getByLabel("API base URL").fill("http://127.0.0.1:11434/v1");
+  await expect(page.getByLabel("API protocol")).toHaveValue("chat-completions");
+  await page.locator("#brain-api-key").fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await page.getByLabel("API base URL").fill("http://localhost:11434/v1");
+  await expect(page.locator("#brain-api-key")).toHaveValue("");
+  await page.locator("#brain-api-key").fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await page.getByLabel("API protocol").selectOption("responses");
+  await expect(page.locator("#brain-api-key")).toHaveValue("");
+  await page.getByLabel("API protocol").selectOption("chat-completions");
+  const sent = page.waitForRequest((request) => request.url().endsWith("/api/brain/connect"));
+  await page.getByRole("button", { name: "Connect brain", exact: true }).click();
+  const payload = (await sent).postDataJSON();
+  expect(payload).toEqual({
+    provider: "compatible",
+    model: "local-model:small",
+    baseURL: "http://localhost:11434/v1",
+    apiStyle: "chat-completions",
+    callsPerMinute: 24,
+  });
+  await expect(page.locator("#brain-connect-feedback")).toContainText("test decision passed");
+  expect(app.scene().brain).toMatchObject({
+    provider: "compatible",
+    baseURL: "http://localhost:11434/v1",
+    apiStyle: "chat-completions",
+    ready: true,
+  });
+  await page.locator("#brain-api-key").fill("FAKE_PROVIDER_BROWSER_TEST_KEY");
+  await page.getByRole("button", { name: "Close dialog" }).click();
+  await settings(page);
+  await expect(page.locator("#brain-api-key")).toHaveValue("");
+  await expect(page.getByLabel("API base URL")).toHaveValue("http://localhost:11434/v1");
+  expect(await page.evaluate(() => JSON.stringify([localStorage, sessionStorage]))).not.toContain(
+    "FAKE_PROVIDER_BROWSER_TEST_KEY",
+  );
+});
+
+test("Bedrock selection uses a model and region without browser AWS credentials", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.url);
+  await settings(page);
+  await page.getByLabel("Provider", { exact: true }).selectOption("bedrock");
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await page.getByLabel("Model or inference-profile ID").fill("us.anthropic.example-model");
+  await page.getByLabel("AWS region").fill("us-east-1");
+  await page.getByRole("button", { name: "Connect brain", exact: true }).click();
+  await expect(page.locator("#brain-connect-feedback")).toContainText("test decision passed");
+  expect(app.scene().brain).toMatchObject({
+    provider: "bedrock",
+    model: "us.anthropic.example-model",
+    awsRegion: "us-east-1",
+    ready: true,
+  });
 });

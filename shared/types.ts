@@ -7,7 +7,17 @@ export type ObjectKind =
   "apple" | "ball" | "tree" | "rock" | "feeder" | "bath" | "carousel" | "beacon";
 export type Tool = "inspect" | "feed" | "wash" | "play" | "pet" | "tree" | "kill";
 export type StructureKind = "feeder" | "bath" | "carousel" | "beacon";
-export type BrainProvider = "local" | "openai" | "anthropic" | "bedrock";
+export type BrainProvider = "local" | "openai" | "anthropic" | "compatible" | "bedrock";
+export type BrainApiStyle = "responses" | "chat-completions";
+export interface BrainConnectionInput {
+  provider: BrainProvider;
+  model?: string;
+  apiKey?: string;
+  baseURL?: string;
+  apiStyle?: BrainApiStyle;
+  awsRegion?: string;
+  callsPerMinute?: number;
+}
 export type Stage = "egg" | "care" | "company" | "language" | "cooperation" | "chorus";
 export type MemoryKind =
   "discovery" | "experience" | "social" | "player" | "birth" | "loss" | "reflection";
@@ -185,6 +195,9 @@ export type SceneCreature = Omit<
   friendCount: number;
 };
 export interface BrainStatus {
+  baseURL?: string;
+  apiStyle?: BrainApiStyle;
+  awsRegion?: string;
   provider: BrainProvider;
   model: string | null;
   ready: boolean;

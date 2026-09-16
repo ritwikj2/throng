@@ -13,7 +13,7 @@ import { PixelIcon, type PixelIconName } from "./ui/icons";
 import { DesktopMenu, NeedMeters, RetroDialog } from "./ui/Retro";
 import { Inspector } from "./ui/Inspector";
 import { ColonyTerminal } from "./ui/Terminal";
-import { ClaudeConnection } from "./ui/Connection";
+import { BrainConnection } from "./ui/Connection";
 import { WorldFiles, Construction, ActivityLog, HelpManual } from "./ui/GameDialogs";
 import { brainReadout, elapsed } from "./ui/status";
 
@@ -311,11 +311,11 @@ export function App() {
             <button disabled={!canPlay} onClick={() => setDialog("build")}>
               Structures &amp; capacity…
             </button>
-            <button onClick={() => setDialog("settings")}>Connect Claude…</button>
+            <button onClick={() => setDialog("settings")}>Connect brain…</button>
           </DesktopMenu>
           <DesktopMenu label="Help">
             <button onClick={() => setDialog("help")}>Controls &amp; about THRONG…</button>
-            <button onClick={() => setDialog("settings")}>Claude connection…</button>
+            <button onClick={() => setDialog("settings")}>Brain connection…</button>
           </DesktopMenu>
           <span className="menu-era">ARTIFICIAL LIFE / 1994</span>
         </nav>
@@ -510,7 +510,8 @@ export function App() {
         <footer className="statusbar">
           <button
             className={`brain-indicator brain-${brain.kind}`}
-            aria-label={`Claude status: ${brain.label}. Open connection settings`}
+            data-testid="brain-status-button"
+            aria-label={`Brain status: ${brain.label}. Open connection settings`}
             onClick={() => setDialog("settings")}
           >
             <i />
@@ -527,13 +528,10 @@ export function App() {
         <RetroDialog
           open
           onClose={() => setDialog(null)}
-          title="THRONG — Claude connection"
-          description="Real model access, request state, and display preferences."
+          title="THRONG — Brain connection"
+          description="Choose a brain provider, check live decisions, and set display preferences."
         >
-          <ClaudeConnection
-            brain={world.brain}
-            onConnected={() => announce("Claude access verified. Waiting for live model status.")}
-          />
+          <BrainConnection brain={world.brain} onConnected={announce} />
           <fieldset className="display-settings">
             <legend>Display &amp; sound</legend>
             <label>

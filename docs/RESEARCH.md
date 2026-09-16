@@ -1,6 +1,6 @@
 # Plaything → Throng
 
-Research dates: 13–14 September 2026. Three agents investigated the episode, the released game, and practical creature cognition separately. This document turns their findings into a build specification. Sources are public; no internal company material or production assets are used.
+Episode and cognition research: 13–14 September 2026. Provider compatibility update: 16 September 2026. Three agents investigated the episode, the released game, and practical creature cognition separately. This document turns their findings into a build specification. Sources are public; no internal company material or production assets are used.
 
 **The closest practical interpretation is a population that begins as something you care for, then develops enough continuity, communication, and independence to become something you have a relationship with.** A larger population alone does not deliver that experience.
 
@@ -40,7 +40,7 @@ These are original design commitments. They are not undocumented claims about th
 
 Park and colleagues' *Generative Agents* architecture combines a record of experience, retrieval, reflection, and planning. Their sandbox study reports believable individual and social behavior and evaluates the contribution of these components through ablation. The relevant result is that memory and planning should be connected to behavior; fluent dialogue alone is insufficient. The study does not demonstrate consciousness, guarantee faithful memories, or provide a ready-made creature simulation. [13]
 
-The rebuilt implementation keeps physical behavior on the server and connects Claude Sonnet 5 for individual decisions. Calls request a bounded action or destination, public intention and reason, speech, a continuing goal, an evidence-backed lesson, and optional memory sharing. Each creature receives only its own selected memories and observations. Accepted decisions drive real behavior; goals and lessons survive saves. Survival behavior continues while the model is unavailable or waiting for its turn. The setup selects Claude explicitly and reports disconnected until credentials are supplied. The model ID and adaptive-thinking request format were checked against Anthropic’s current documentation [17,18].
+The rebuilt implementation keeps physical behavior on the server and connects a user-selected model provider for individual decisions. Calls request a bounded action or destination, public intention and reason, speech, a continuing goal, an evidence-backed lesson, and optional memory sharing. Each creature receives only its own selected memories and observations. Accepted decisions drive real behavior; goals and lessons survive saves. Survival behavior continues while the model is unavailable or waiting for its turn. The initial model-enabled rebuild selected Claude Sonnet 5, checked against Anthropic’s documentation [17,18]. The provider update adds a model-independent connection dialog for Anthropic, OpenAI Responses (including API-accessible Codex models), compatible Chat completions/Responses servers, and Claude on Bedrock [19–22]. New installations now start offline. Each external connection must pass one synthetic decision through the engine before activation; this does not establish a provider’s long-term reliability or any claim about consciousness.
 
 The UI distinguishes “BODY POLICY” from “MODEL PLAN” and reports how many model decisions the engine has applied. Goals and lessons appear only when recorded. Model mode suppresses fixed local reflections and scripted direct replies; a disconnected model is not presented as live intelligence. These labels describe computation, not subjective experience.
 
@@ -97,5 +97,10 @@ A meaningful failure would be a creature claiming an unseen event, every individ
 
 17. [Anthropic: Models overview](https://platform.claude.com/docs/en/about-claude/models/overview), consulted 14 September 2026. Confirms `claude-sonnet-5`.
 18. [Anthropic: Sonnet 5 overview](https://platform.claude.com/docs/en/models/sonnet-5/overview), consulted 14 September 2026. Adaptive thinking and effort controls.
+
+19. [OpenAI: GPT-5.3-Codex API model](https://developers.openai.com/api/docs/models/gpt-5.3-codex), consulted 16 September 2026. Responses and Structured Outputs support; account access can differ.
+20. [OpenAI: Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs), consulted 16 September 2026. Schema requirements, refusals, and validation boundaries.
+21. [OpenAI: Reasoning models](https://developers.openai.com/api/docs/guides/reasoning), consulted 16 September 2026. Output budgets include reasoning tokens; incomplete output remains possible.
+22. [Ollama: OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility), consulted 16 September 2026. Supported subsets of Chat completions and stateless Responses; compatibility is protocol-dependent.
 
 Support pages were consulted on the research dates. Their numbers and narrative unlocks are not presented as verified measurements of a current mobile-game binary. Research images, episode frames, official sprites, logos, and dialogue scripts are not included in this project.

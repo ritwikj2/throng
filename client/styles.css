@@ -620,6 +620,7 @@ canvas {
   min-width: 0;
 }
 .brain-indicator {
+  overflow-wrap: anywhere;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1052,7 +1053,7 @@ canvas {
   justify-content: space-between;
   gap: 8px;
 }
-.connection-counters > div:first-child {
+.connection-counters > .connection-detail {
   grid-column: 1/-1;
 }
 .connection-counters dt {
@@ -1077,8 +1078,18 @@ canvas {
   font-size: 11px;
   margin-top: 3px;
 }
-.connect-form input {
+.connect-form input,
+.connect-form select {
   width: 100%;
+}
+.connection-verification {
+  padding: 8px;
+  margin-top: 4px;
+  border: 1px solid;
+  border-color: #808080 #fff #fff #808080;
+  background: #dfdfdf;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .connect-form button {
   justify-self: start;
@@ -1614,6 +1625,7 @@ canvas {
     min-height: 23px;
   }
   .connect-form input,
+  .connect-form select,
   .new-world-form input {
     font-size: 16px;
   }

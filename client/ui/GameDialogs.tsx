@@ -253,11 +253,17 @@ export function HelpManual({ tools }: { tools: readonly { label: string; hint: s
         Body-policy actions are labeled separately. The colony voice drawer identifies model and
         body messages.
       </p>
-      <h3>CLAUDE SONNET 5</h3>
+      <h3>BRAIN CONNECTION</h3>
       <p>
-        Open Simulation → Connect Claude. Without a verified connection, only body simulation runs.
-        Configured access is not an accepted decision: live request, failure, accepted, and rejected
-        counts show what has actually happened.
+        Open Simulation → Connect brain. Choose offline body simulation, Anthropic, OpenAI, a
+        compatible service, or Claude on Amazon Bedrock. Model IDs are editable. OpenAI uses your
+        API account’s model access; it does not sign into the Codex CLI or ChatGPT app.
+      </p>
+      <p>
+        An external connection sends one small, potentially paid test decision for an isolated
+        creature before replacing the current brain. Configured access is not an applied colony
+        plan: live pending, failure, applied, and rejected counts show what has actually happened.
+        Offline mode runs body simulation without model decisions.
       </p>
       <h3>WORLD FILES</h3>
       <p>

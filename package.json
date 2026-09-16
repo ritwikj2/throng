@@ -18,7 +18,8 @@
     "export:source": "node scripts/export.mjs",
     "test:watch": "vitest",
     "screenshots": "npm run build && node --import tsx scripts/screenshots.mjs",
-    "check:claude": "node --disable-warning=ExperimentalWarning --import tsx scripts/check-claude.mjs"
+    "check:claude": "node --disable-warning=ExperimentalWarning --import tsx scripts/check-claude.mjs",
+    "check:brain": "node --disable-warning=ExperimentalWarning --import tsx scripts/check-brain.mjs"
   },
   "dependencies": {
     "@anthropic-ai/bedrock-sdk": "0.33.4",

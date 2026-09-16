@@ -1,4 +1,4 @@
-import type { BrainStatus, Creature, SceneCreature } from "../../shared/types";
+import type { BrainProvider, BrainStatus, Creature, SceneCreature } from "../../shared/types";
 
 type ExtendedBrain = BrainStatus & {
   accepted?: number;
@@ -13,41 +13,48 @@ type StoredCognition = {
   decisions?: unknown;
 };
 
+export const BRAIN_PROVIDER_LABELS: Record<BrainProvider, string> = {
+  local: "Offline (body simulation)",
+  anthropic: "Anthropic API",
+  openai: "OpenAI API",
+  compatible: "Compatible API",
+  bedrock: "Claude on Amazon Bedrock",
+};
+
 export function brainReadout(brain: BrainStatus) {
   const state = brain as ExtendedBrain;
-  const model = brain.model || "Not configured";
-  const isSonnet = model.toLowerCase().includes("claude-sonnet-5");
+  const provider = BRAIN_PROVIDER_LABELS[brain.provider] ?? "Unknown provider";
+  const model =
+    brain.provider === "local" ? "None (body simulation)" : brain.model || "Not configured";
+  const identity = brain.model ? `${provider} · ${brain.model}` : provider;
   const accepted =
     typeof state.accepted === "number" && Number.isFinite(state.accepted) ? state.accepted : null;
   const rejected =
     typeof state.rejected === "number" && Number.isFinite(state.rejected) ? state.rejected : null;
-  let kind: "offline" | "error" | "waiting" | "pending" | "live" | "other" = "offline";
-  let label = "Claude disconnected — body simulation only";
-  if (brain.ready && brain.provider !== "local") {
-    if (brain.lastError) {
+  let kind: "offline" | "error" | "waiting" | "pending" | "live" = "offline";
+  let label = "Brain offline — body simulation only";
+  if (brain.provider !== "local") {
+    if (!brain.ready) {
+      label = `${identity} disconnected — body simulation only`;
+    } else if (brain.lastError) {
       kind = "error";
-      label = isSonnet
-        ? "Claude error — body simulation only"
-        : "Model request failed — body simulation only";
-    } else if (!isSonnet) {
-      kind = "other";
-      label = `${model} configured — Sonnet 5 not selected`;
+      label = `${identity} — last request failed`;
     } else if (brain.pending > 0) {
       kind = "pending";
-      label = "Claude Sonnet 5 — request in progress";
+      label = `${identity} — ${brain.pending} pending`;
     } else if (accepted !== null && accepted > 0) {
       kind = "live";
-      label = `Claude Sonnet 5 — ${accepted} ${accepted === 1 ? "plan" : "plans"} applied`;
+      label = `${identity} — ${accepted} ${accepted === 1 ? "plan" : "plans"} applied`;
     } else {
       kind = "waiting";
-      label = "Claude Sonnet 5 configured — awaiting a plan";
+      label = `${identity} configured — waiting for a plan`;
     }
   }
   return {
     kind,
     label,
+    provider,
     model,
-    isSonnet,
     accepted,
     rejected,
     lastDecisionAt: state.lastDecisionAt ?? null,

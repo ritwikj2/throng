@@ -1,5 +1,6 @@
 import type {
   BrainProvider,
+  BrainApiStyle,
   BrainStatus,
   Creature,
   MindContext,
@@ -21,6 +22,7 @@ export interface BrainConfig {
   apiKey?: string; // Server-only; status() must never spread this object.
   awsRegion?: string;
   openAIBaseURL: string;
+  apiStyle?: BrainApiStyle;
   callsPerMinute: number;
   timeoutMs: number;
   minSimulationInterval: number;
@@ -67,13 +69,30 @@ const clock: CognitionClock = {
 const providerLabels: Record<BrainProvider, string> = {
   local: "Local learned policy",
   openai: "OpenAI",
+  compatible: "Compatible API",
   anthropic: "Anthropic",
   bedrock: "Claude on Amazon Bedrock",
 };
 
+export function normalizeBrainURL(value: string): string {
+  if (!value || value.length > 2048 || /[\u0000-\u0020\u007f]/.test(value))
+    throw new Error("Invalid API base URL");
+  const url = new URL(value);
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("Invalid API base URL");
+  return url.toString().replace(/\/+$/, "");
+}
+
 export function readBrainConfig(env: NodeJS.ProcessEnv): BrainConfig {
   const requested = env.THRONG_BRAIN?.trim().toLowerCase() || "local";
-  const known = ["local", "openai", "anthropic", "bedrock"].includes(requested);
+  const known = ["local", "openai", "anthropic", "compatible", "bedrock"].includes(requested);
   const config: BrainConfig = {
     provider: known ? (requested as BrainProvider) : "local",
     model: null,
@@ -83,7 +102,7 @@ export function readBrainConfig(env: NodeJS.ProcessEnv): BrainConfig {
     minSimulationInterval: 30,
     configurationError: known
       ? null
-      : "THRONG_BRAIN must be local, openai, anthropic, or bedrock; using local policy.",
+      : "THRONG_BRAIN must be local, openai, anthropic, compatible, or bedrock; using local policy.",
   };
   // Ambient keys/model/base URLs never opt a local game into remote requests.
   if (config.provider === "local") return config;
@@ -112,29 +131,39 @@ export function readBrainConfig(env: NodeJS.ProcessEnv): BrainConfig {
   if (!model || model.length > 200 || /[\u0000-\u0020\u007f]/.test(model))
     fail("Set THRONG_MODEL to a valid model ID for the selected provider.");
   else config.model = model;
-  if (config.provider === "openai" || config.provider === "anthropic") {
-    const name = config.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  if (["openai", "anthropic", "compatible"].includes(config.provider)) {
+    const name =
+      config.provider === "anthropic"
+        ? "ANTHROPIC_API_KEY"
+        : config.provider === "compatible"
+          ? "COMPATIBLE_API_KEY"
+          : "OPENAI_API_KEY";
     const key = env[name]?.trim();
-    if (!key || /[\r\n]/.test(key)) fail(`Set ${name} in the server environment.`);
-    else config.apiKey = key;
+    if (!key && config.provider !== "compatible") fail(`Set ${name} in the server environment.`);
+    else if (key && (key.length > 4096 || /[\u0000-\u0020\u007f]/.test(key)))
+      fail(`${name} must be a valid API key without whitespace or control characters.`);
+    else if (key) config.apiKey = key;
   }
-  if (config.provider === "openai" && env.OPENAI_BASE_URL?.trim()) {
-    try {
-      const url = new URL(env.OPENAI_BASE_URL.trim());
-      const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-      if (
-        (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) ||
-        url.username ||
-        url.password ||
-        url.search ||
-        url.hash
-      )
-        throw new Error("Invalid URL");
-      config.openAIBaseURL = url.toString().replace(/\/+$/, "");
-    } catch {
-      fail(
-        "OPENAI_BASE_URL must be an HTTPS base URL, or a loopback HTTP URL, without credentials, query, or fragment.",
-      );
+  if (config.provider === "openai" || config.provider === "compatible") {
+    const name = config.provider === "compatible" ? "COMPATIBLE_BASE_URL" : "OPENAI_BASE_URL";
+    const value = env[name]?.trim();
+    if (!value && config.provider === "compatible")
+      fail("Set COMPATIBLE_BASE_URL to the API base URL.");
+    if (value) {
+      try {
+        config.openAIBaseURL = normalizeBrainURL(value);
+      } catch {
+        fail(
+          `${name} must be an HTTPS base URL, or a loopback HTTP URL, without credentials, query, or fragment.`,
+        );
+      }
+    }
+    config.apiStyle = "responses";
+    if (config.provider === "compatible") {
+      const style = env.COMPATIBLE_API_STYLE?.trim() || "chat-completions";
+      if (style !== "responses" && style !== "chat-completions")
+        fail("COMPATIBLE_API_STYLE must be responses or chat-completions.");
+      config.apiStyle = style === "responses" ? "responses" : "chat-completions";
     }
   }
   if (config.provider === "bedrock") {
@@ -277,6 +306,13 @@ export function createCognition(config: BrainConfig, options: CognitionOptions =
     status(): BrainStatus {
       return {
         provider: config.provider,
+        ...((config.provider === "openai" || config.provider === "compatible") &&
+        config.configurationError === null
+          ? { baseURL: config.openAIBaseURL, apiStyle: config.apiStyle ?? "responses" }
+          : {}),
+        ...(config.provider === "bedrock" && config.awsRegion
+          ? { awsRegion: config.awsRegion }
+          : {}),
         model: config.provider === "local" ? null : config.model,
         ready: !stopped && (config.provider === "local" || config.configurationError === null),
         label: stopped

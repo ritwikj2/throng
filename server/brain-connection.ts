@@ -1,104 +1,239 @@
 import { chmod, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { readBrainConfig, type BrainConfig } from "./cognition";
+import type { BrainConnectionInput } from "../shared/types";
+import { normalizeBrainURL, readBrainConfig, type BrainConfig } from "./cognition";
+import {
+  createProviderClient,
+  safeProviderError,
+  type CognitionClient,
+  type ProviderDependencies,
+} from "./cognition-providers";
+import { projectMindContext, validateMindDecision } from "./cognition-protocol";
+import {
+  applyCommand,
+  applyMindDecision,
+  createWorld,
+  getMindContext,
+  stepWorld,
+} from "./simulation";
 
 export const CLAUDE_MODEL = "claude-sonnet-5";
-export const connectionSchema = z
-  .object({
-    apiKey: z
-      .string()
-      .trim()
-      .min(12)
-      .max(512)
-      .refine((key) => !/[\r\n\u0000]/.test(key)),
-    callsPerMinute: z.number().int().min(1).max(60).optional(),
-  })
-  .strict();
-export type ConnectionInput = z.infer<typeof connectionSchema>;
-
-export async function verifyClaudeAccess(
-  input: ConnectionInput,
-  fetcher: typeof fetch = fetch,
-): Promise<BrainConfig> {
-  const response = await fetcher(`https://api.anthropic.com/v1/models/${CLAUDE_MODEL}`, {
-    headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" },
-    redirect: "error",
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    void response.body?.cancel().catch(() => {});
-    throw new Error(
-      response.status === 401 || response.status === 403 || response.status === 404
-        ? "Claude access could not be verified. Check the key and Sonnet 5 access on your Anthropic account."
-        : "Anthropic could not verify access right now. Try again shortly.",
-    );
-  }
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("Anthropic returned an unreadable model response.");
-  let bytes = 0;
-  let body = "";
-  const decoder = new TextDecoder();
-  try {
-    for (;;) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      if (bytes > 65_536) {
-        void reader.cancel().catch(() => {});
-        throw new Error("Model response was too large.");
-      }
-      body += decoder.decode(chunk.value, { stream: true });
+const model = z
+  .string()
+  .trim()
+  .min(1)
+  .max(200)
+  .refine((value) => !/[\u0000-\u0020\u007f]/.test(value));
+const key = z
+  .string()
+  .trim()
+  .max(4096)
+  .refine((value) => !/[\u0000-\u0020\u007f]/.test(value));
+const callsPerMinute = z.number().int().min(1).max(60).optional();
+const baseURL = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => {
+    try {
+      normalizeBrainURL(value);
+      return true;
+    } catch {
+      return false;
     }
-    body += decoder.decode();
-  } finally {
-    reader.releaseLock();
-  }
-  let model: { id?: unknown };
-  try {
-    model = JSON.parse(body) as { id?: unknown };
-  } catch {
-    throw new Error("Anthropic returned an unreadable model response.");
-  }
-  if (!model || typeof model.id !== "string" || !model.id.startsWith(CLAUDE_MODEL))
-    throw new Error("Claude Sonnet 5 was not available for this key.");
-  return readBrainConfig({
-    THRONG_BRAIN: "anthropic",
-    THRONG_MODEL: CLAUDE_MODEL,
-    ANTHROPIC_API_KEY: input.apiKey,
-    THRONG_CALLS_PER_MINUTE: String(input.callsPerMinute ?? 24),
+  });
+const schema = z.discriminatedUnion("provider", [
+  z.object({ provider: z.literal("local"), callsPerMinute }).strict(),
+  z
+    .object({
+      provider: z.literal("anthropic"),
+      model,
+      apiKey: key.refine((value) => value.length > 0),
+      callsPerMinute,
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.literal("openai"),
+      model,
+      apiKey: key.refine((value) => value.length > 0),
+      callsPerMinute,
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.literal("compatible"),
+      model,
+      baseURL,
+      apiStyle: z.enum(["responses", "chat-completions"]).optional(),
+      apiKey: key.optional(),
+      callsPerMinute,
+    })
+    .strict(),
+  z
+    .object({
+      provider: z.literal("bedrock"),
+      model,
+      awsRegion: z
+        .string()
+        .trim()
+        .regex(/^[a-z]{2}(?:-[a-z]+)+-\d+$/),
+      callsPerMinute,
+    })
+    .strict(),
+]);
+// Existing open Claude dialogs can finish during a frontend/server update.
+export const connectionSchema = z.preprocess((input) => {
+  if (
+    input &&
+    typeof input === "object" &&
+    !Array.isArray(input) &&
+    !("provider" in input) &&
+    "apiKey" in input
+  )
+    return { provider: "anthropic", model: CLAUDE_MODEL, ...input };
+  return input;
+}, schema);
+export type ConnectionInput = BrainConnectionInput;
+
+export class BrainConnectionError extends Error {}
+
+function connectionEnvironment(input: ConnectionInput): Record<string, string> {
+  const result = connectionSchema.safeParse(input);
+  if (!result.success)
+    throw new BrainConnectionError(
+      "Check the provider, model, credentials, endpoint, and request limit.",
+    );
+  const selected = result.data;
+  const values: Record<string, string> = {
+    THRONG_BRAIN: selected.provider,
+    THRONG_MODEL: selected.provider === "local" ? "" : selected.model,
+    THRONG_CALLS_PER_MINUTE: String(selected.callsPerMinute ?? 24),
     THRONG_THINK_INTERVAL_SECONDS: "8",
     THRONG_BRAIN_TIMEOUT_MS: "25000",
-  });
+  };
+  switch (selected.provider) {
+    case "anthropic":
+      values.ANTHROPIC_API_KEY = selected.apiKey;
+      break;
+    case "openai":
+      values.OPENAI_API_KEY = selected.apiKey;
+      // A key entered for OpenAI must not inherit an older custom endpoint.
+      values.OPENAI_BASE_URL = "https://api.openai.com/v1";
+      break;
+    case "compatible":
+      values.COMPATIBLE_API_KEY = selected.apiKey ?? "";
+      values.COMPATIBLE_BASE_URL = normalizeBrainURL(selected.baseURL);
+      values.COMPATIBLE_API_STYLE = selected.apiStyle ?? "chat-completions";
+      break;
+    case "bedrock":
+      values.AWS_REGION = selected.awsRegion;
+      break;
+  }
+  return values;
 }
 
-export async function persistClaudeConnection(path: string, input: ConnectionInput): Promise<void> {
+export function connectionConfig(input: ConnectionInput): BrainConfig {
+  const config = readBrainConfig(connectionEnvironment(input));
+  if (config.configurationError) throw new BrainConnectionError(config.configurationError);
+  return config;
+}
+
+export interface ConnectionCheckOptions extends ProviderDependencies {
+  client?: CognitionClient;
+  signal?: AbortSignal;
+}
+
+export async function verifyBrainAccess(
+  input: ConnectionInput,
+  options: ConnectionCheckOptions = {},
+): Promise<BrainConfig> {
+  const config = connectionConfig(input);
+  if (config.provider === "local") return config;
+  const timeout = AbortSignal.timeout(config.timeoutMs);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  if (signal.aborted) throw new BrainConnectionError("The connection check was canceled.");
+  // One isolated decision verifies the actual wire protocol and game contract.
+  // It contains no user world, player messages, saved histories, or credentials.
+  const world = createWorld(20260916, "Synthetic brain connection check");
+  world.cognitionMode = "model";
+  applyCommand(world, { type: "hatch" });
+  stepWorld(world, 0.1);
+  const creature = world.creatures[0]!;
+  const context = projectMindContext(getMindContext(world, creature.id)!);
+  let onAbort = () => {};
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () =>
+      reject(
+        new BrainConnectionError(
+          timeout.aborted
+            ? "The test decision timed out. Check the server and model, then try again."
+            : "The connection check was canceled.",
+        ),
+      );
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const client = options.client ?? createProviderClient(config, options);
+    const raw = await Promise.race([
+      Promise.resolve().then(() => client.decide(context, signal)),
+      aborted,
+    ]);
+    if (signal.aborted) throw new BrainConnectionError("The connection check was canceled.");
+    let decision;
+    try {
+      decision = validateMindDecision(raw, context);
+    } catch {
+      throw new BrainConnectionError(
+        "The model did not return a valid creature decision. Check its JSON support and the selected API protocol.",
+      );
+    }
+    if (!applyMindDecision(world, creature.id, decision))
+      throw new BrainConnectionError(
+        "The test decision could not be applied. Choose a model that can follow the creature action schema and try again.",
+      );
+    return config;
+  } catch (error) {
+    if (error instanceof BrainConnectionError) throw error;
+    throw new BrainConnectionError(safeProviderError(error));
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+export async function persistBrainConnection(
+  path: string,
+  input: ConnectionInput,
+  signal?: AbortSignal,
+): Promise<void> {
+  const checkCanceled = () => {
+    if (signal?.aborted) throw new BrainConnectionError("The connection check was canceled.");
+  };
+  checkCanceled();
+  const values = connectionEnvironment(input);
   let current = "";
   try {
     current = await readFile(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const values: Record<string, string> = {
-    THRONG_BRAIN: "anthropic",
-    THRONG_MODEL: CLAUDE_MODEL,
-    ANTHROPIC_API_KEY: JSON.stringify(input.apiKey),
-    THRONG_CALLS_PER_MINUTE: String(input.callsPerMinute ?? 24),
-    THRONG_THINK_INTERVAL_SECONDS: "8",
-    THRONG_BRAIN_TIMEOUT_MS: "25000",
-  };
+  checkCanceled();
   const lines = current.split(/\r?\n/).filter((line) => {
-    const key = /^\s*(?:export\s+)?([A-Z_]+)\s*=/.exec(line)?.[1];
-    return !key || !Object.hasOwn(values, key);
+    const name = /^\s*(?:export\s+)?([A-Z_]+)\s*=/.exec(line)?.[1];
+    return !name || !Object.hasOwn(values, name);
   });
   const content = `${lines.join("\n").trimEnd()}\n${Object.entries(values)
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
     .join("\n")}\n`;
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, content, { mode: 0o600, flag: "wx" });
+    await writeFile(temporary, content, { mode: 0o600, flag: "wx", signal });
+    await chmod(temporary, 0o600);
+    checkCanceled();
+    // Rename commits the settings. Cancellation after this point cannot undo it;
+    // the caller must complete activation and report the committed result.
     await rename(temporary, path);
-    await chmod(path, 0o600);
   } finally {
     await unlink(temporary).catch(() => {});
   }

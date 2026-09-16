@@ -9,12 +9,13 @@
     "individual.png",
     "memory.png",
     "squash.png",
-    "connect-claude.png",
+    "connect-brain.png",
+    "compatible-brain.png",
     "mobile.png",
     "beginning.png"
   ],
   "synthetic": true,
   "provider": "local",
   "paidModelCalls": 0,
-  "capturedAt": "2026-09-14T05:24:15.047Z"
+  "capturedAt": "2026-09-16T06:09:10.273Z"
 }

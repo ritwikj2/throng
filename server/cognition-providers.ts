@@ -1,6 +1,17 @@
 import type { MindContext } from "../shared/types";
 import type { BrainConfig } from "./cognition";
-import { decisionSchema, MAX_OUTPUT_TOKENS, SYSTEM_PROMPT } from "./cognition-protocol";
+import {
+  decisionSchema,
+  MAX_OUTPUT_TOKENS,
+  projectMindContext,
+  SYSTEM_PROMPT,
+  validateMindDecision,
+} from "./cognition-protocol";
+
+// Exact model cards documenting low reasoning effort:
+// https://developers.openai.com/api/docs/models/gpt-5.3-codex
+// https://developers.openai.com/api/docs/models/gpt-5.2-codex
+const LOW_EFFORT_CODEX_MODELS = new Set(["gpt-5.3-codex", "gpt-5.2-codex"]);
 
 export interface CognitionClient {
   decide(context: MindContext, signal: AbortSignal): Promise<unknown>;
@@ -105,23 +116,61 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function openAIOutput(value: unknown): unknown {
+function openAIOutput(value: unknown): string {
   const response = object(value);
-  if (response.status !== "completed" || !Array.isArray(response.output))
+  if (
+    response.status !== "completed" ||
+    response.error != null ||
+    response.incomplete_details != null ||
+    !Array.isArray(response.output)
+  )
     throw new CognitionRequestError("invalid");
   const texts: string[] = [];
   for (const item of response.output) {
     const entry = object(item);
-    if (entry.type !== "message") continue; // Never expose reasoning items.
-    if (!Array.isArray(entry.content)) throw new CognitionRequestError("invalid");
+    if (entry.type === "reasoning") continue; // Never expose reasoning items.
+    if (
+      entry.type !== "message" ||
+      (entry.role !== undefined && entry.role !== "assistant") ||
+      (entry.status !== undefined && entry.status !== "completed") ||
+      !Array.isArray(entry.content)
+    )
+      throw new CognitionRequestError("invalid");
     for (const block of entry.content) {
       const part = object(block);
-      if (part.type === "refusal") throw new CognitionRequestError("invalid");
-      if (part.type === "output_text" && typeof part.text === "string") texts.push(part.text);
+      if (part.type !== "output_text" || typeof part.text !== "string")
+        throw new CognitionRequestError("invalid");
+      texts.push(part.text);
     }
   }
   if (texts.length !== 1) throw new CognitionRequestError("invalid");
-  return texts[0];
+  return texts[0]!;
+}
+
+function chatOutput(value: unknown): string {
+  const response = object(value);
+  if (response.error != null || !Array.isArray(response.choices) || response.choices.length !== 1)
+    throw new CognitionRequestError("invalid");
+  const choice = object(response.choices[0]);
+  if (choice.finish_reason !== "stop") throw new CognitionRequestError("invalid");
+  const message = object(choice.message);
+  if (
+    message.role !== "assistant" ||
+    typeof message.content !== "string" ||
+    message.refusal != null ||
+    message.function_call != null ||
+    (message.tool_calls != null &&
+      (!Array.isArray(message.tool_calls) || message.tool_calls.length > 0))
+  )
+    throw new CognitionRequestError("invalid");
+  return message.content;
+}
+
+function jsonOnlyPrompt(context: MindContext): string {
+  return `${SYSTEM_PROMPT}
+Return exactly one JSON object matching the schema below. Do not use Markdown fences, commentary, or tool calls.
+JSON schema:
+${JSON.stringify(decisionSchema(context.availableActions))}`;
 }
 
 function toolOutput(value: unknown): unknown {
@@ -139,31 +188,71 @@ export function createProviderClient(
   dependencies: ProviderDependencies = {},
 ): CognitionClient {
   const nativeFetch = dependencies.fetch ?? globalThis.fetch;
-  if (config.provider === "openai") {
-    const fetch = restrictedFetch(config.openAIBaseURL, nativeFetch);
+  if (config.provider === "openai" || config.provider === "compatible") {
+    const official = config.provider === "openai";
+    const chat = !official && (config.apiStyle ?? "chat-completions") === "chat-completions";
+    // Bind endpoint and credentials together for this client's lifetime.
+    const baseURL = config.openAIBaseURL.replace(/\/+$/, "");
+    const model = config.model;
+    const apiKey = config.apiKey?.trim();
+    const fetch = restrictedFetch(baseURL, nativeFetch);
     return {
       async decide(context, signal) {
-        const response = await fetch(`${config.openAIBaseURL}/responses`, {
+        if (signal.aborted) throw new CognitionRequestError("unavailable");
+        if (official && !apiKey) throw new CognitionRequestError("auth");
+        const projected = projectMindContext(context);
+        const instructions = official ? SYSTEM_PROMPT : jsonOnlyPrompt(projected);
+        const body = chat
+          ? {
+              model,
+              max_tokens: MAX_OUTPUT_TOKENS,
+              messages: [
+                { role: "system", content: instructions },
+                { role: "user", content: JSON.stringify(projected) },
+              ],
+            }
+          : {
+              model,
+              max_output_tokens: MAX_OUTPUT_TOKENS,
+              instructions,
+              input: [{ role: "user", content: JSON.stringify(projected) }],
+              ...(official
+                ? {
+                    store: false,
+                    ...(LOW_EFFORT_CODEX_MODELS.has(model ?? "")
+                      ? { reasoning: { effort: "low" } }
+                      : {}),
+                    text: {
+                      format: {
+                        type: "json_schema",
+                        name: "creature_decision",
+                        strict: true,
+                        schema: decisionSchema(projected.availableActions),
+                      },
+                    },
+                  }
+                : {}),
+            };
+        const response = await fetch(`${baseURL}/${chat ? "chat/completions" : "responses"}`, {
           method: "POST",
           signal,
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
-          body: JSON.stringify({
-            model: config.model,
-            store: false,
-            max_output_tokens: MAX_OUTPUT_TOKENS,
-            instructions: SYSTEM_PROMPT,
-            input: [{ role: "user", content: JSON.stringify(context) }],
-            text: {
-              format: {
-                type: "json_schema",
-                name: "creature_decision",
-                strict: true,
-                schema: decisionSchema(context.availableActions),
-              },
-            },
-          }),
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify(body),
         });
-        return openAIOutput(await readJSON(response));
+        const data = await readJSON(response);
+        if (signal.aborted) throw new CognitionRequestError("unavailable");
+        const output = chat ? chatOutput(data) : openAIOutput(data);
+        if (official) return output;
+        // Compatible endpoints need no vendor-specific structured-output support.
+        // A complete JSON decision must pass the same validator as scheduled plans.
+        try {
+          return validateMindDecision(output, projected);
+        } catch {
+          throw new CognitionRequestError("invalid");
+        }
       },
     };
   }

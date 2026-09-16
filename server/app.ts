@@ -14,8 +14,9 @@ import {
 import { ColonyStore } from "./store";
 import {
   connectionSchema,
-  persistClaudeConnection,
-  verifyClaudeAccess,
+  persistBrainConnection,
+  verifyBrainAccess,
+  BrainConnectionError,
   type ConnectionInput,
 } from "./brain-connection";
 import { commandSchema, newColonySchema } from "./validation";
@@ -48,6 +49,8 @@ export async function createApp(options: AppOptions = {}) {
   let lastTick = performance.now();
   let saveError = false;
   let connectingBrain = false;
+  let connectionAbort: AbortController | null = null;
+  let connectionFinished: Promise<void> | null = null;
   let lastPublishedAt = 0;
   const scene = (): SceneState => {
     // Order simultaneous HTTP acknowledgements and socket frames unambiguously.
@@ -88,6 +91,7 @@ export async function createApp(options: AppOptions = {}) {
     saveError = false;
   };
   const json = (res: ServerResponse, code: number, data: unknown) => {
+    if (res.destroyed || res.writableEnded) return;
     res.writeHead(code, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",
@@ -128,6 +132,7 @@ export async function createApp(options: AppOptions = {}) {
     res.setHeader("X-Frame-Options", "DENY");
     if (!trusted(req))
       return json(res, 403, { error: "Open the game through its localhost address." });
+    if (closed) return json(res, 503, { error: "The game is stopping." });
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(req.url ?? "/", `http://${req.headers.host}`).pathname);
@@ -142,39 +147,78 @@ export async function createApp(options: AppOptions = {}) {
         const parsed = connectionSchema.safeParse(await readJson(req));
         if (!parsed.success)
           return json(res, 400, {
-            error: "Enter a valid API key and a call limit between 1 and 60.",
+            error:
+              "Check the provider, model, credentials, endpoint, and request limit (1–60 per minute).",
           });
         if (connectingBrain)
-          return json(res, 409, { error: "A Claude connection is already being checked." });
+          return json(res, 409, { error: "A brain connection is already being checked." });
         connectingBrain = true;
+        const controller = new AbortController();
+        connectionAbort = controller;
+        let finishConnection = () => {};
+        const finished = new Promise<void>((resolve) => {
+          finishConnection = resolve;
+        });
+        connectionFinished = finished;
+        const cancelCheck = () => {
+          if (!res.writableFinished) controller.abort();
+        };
+        res.once("close", cancelCheck);
+        let cancelVerification = () => {};
+        const canceled = new Promise<never>((_, reject) => {
+          cancelVerification = () =>
+            reject(new BrainConnectionError("The connection check was canceled."));
+          controller.signal.addEventListener("abort", cancelVerification, { once: true });
+        });
+        let replacement: ReturnType<typeof createCognition> | undefined;
         try {
-          const nextConfig = await (options.verifyBrainConnection ?? verifyClaudeAccess)(
-            parsed.data,
-          );
-          if (closed)
-            return json(res, 503, { error: "The game is stopping. Connect again after restart." });
+          const verification = options.verifyBrainConnection
+            ? options.verifyBrainConnection(parsed.data)
+            : verifyBrainAccess(parsed.data, { signal: controller.signal });
+          const nextConfig = await Promise.race([verification, canceled]);
+          if (closed || controller.signal.aborted)
+            throw new BrainConnectionError("The connection check was canceled.");
+          replacement = createCognition(nextConfig, options.cognitionOptions);
+          // Flush the world before committing credentials. A failed save must not
+          // leave a new provider enabled after the request reports failure.
+          save();
           if (options.brainEnvironmentPath !== false)
-            await persistClaudeConnection(
+            await persistBrainConnection(
               options.brainEnvironmentPath ?? resolve(PROJECT_ROOT, ".env"),
               parsed.data,
+              controller.signal,
             );
-          if (closed)
-            return json(res, 503, { error: "The game is stopping. Connect again after restart." });
+          // Settings are committed. Complete the matching runtime change without
+          // another fallible database write, even if the response was disconnected.
           cognition.stop();
           brainConfig = nextConfig;
-          cognition = createCognition(brainConfig, options.cognitionOptions);
-          world.cognitionMode = "model";
-          save();
-          cognition.tick(world);
-          broadcast();
-          return json(res, 200, { brain: cognition.status() });
-        } catch {
+          cognition = replacement;
+          replacement = undefined;
+          world.cognitionMode = brainConfig.provider === "local" ? "local" : "model";
+          if (closed) cognition.stop();
+          else {
+            cognition.tick(world);
+            broadcast();
+          }
+          return json(res, 200, {
+            brain: cognition.status(),
+            verification: brainConfig.provider === "local" ? "offline" : "decision-tested",
+          });
+        } catch (error) {
+          replacement?.stop();
           return json(res, 400, {
             error:
-              "Claude could not connect. Check your Anthropic API key, Sonnet 5 access, and the server connection.",
+              error instanceof BrainConnectionError
+                ? error.message
+                : "The brain could not connect or save its settings. Check the provider, model, credentials, and server connection.",
           });
         } finally {
+          controller.signal.removeEventListener("abort", cancelVerification);
+          res.removeListener("close", cancelCheck);
+          if (connectionAbort === controller) connectionAbort = null;
           connectingBrain = false;
+          if (connectionFinished === finished) connectionFinished = null;
+          finishConnection();
         }
       }
       if (pathname.startsWith("/api/creatures/") && req.method === "GET") {
@@ -343,6 +387,8 @@ export async function createApp(options: AppOptions = {}) {
     stop: async () => {
       if (closed) return;
       closed = true;
+      const finishing = connectionFinished;
+      connectionAbort?.abort();
       if (timer) clearInterval(timer);
       clearInterval(network);
       clearInterval(persist);
@@ -354,6 +400,7 @@ export async function createApp(options: AppOptions = {}) {
         server.close(() => ok());
         server.closeAllConnections();
       });
+      await finishing;
       try {
         save();
       } finally {

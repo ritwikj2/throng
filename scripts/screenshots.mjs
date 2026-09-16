@@ -70,9 +70,15 @@ try {
   await page.getByRole("button", { name: "Kill creature", exact: true }).click();
   await page.screenshot({ path: directory + "squash.png", fullPage: true });
   await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: /^Claude status:/ }).click();
+  await page.getByRole("button", { name: /^Brain status:/ }).click();
   await page.getByRole("dialog").waitFor();
-  await page.screenshot({ path: directory + "connect-claude.png", fullPage: true });
+  await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+  await page.getByLabel("API model ID").fill("gpt-5.3-codex");
+  await page.screenshot({ path: directory + "connect-brain.png", fullPage: true });
+  await page.getByLabel("Provider", { exact: true }).selectOption("compatible");
+  await page.getByLabel("API model ID").fill("your-installed-model-id");
+  await page.getByLabel("API base URL").fill("http://127.0.0.1:11434/v1");
+  await page.screenshot({ path: directory + "compatible-brain.png", fullPage: true });
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -96,7 +102,8 @@ try {
       "individual.png",
       "memory.png",
       "squash.png",
-      "connect-claude.png",
+      "connect-brain.png",
+      "compatible-brain.png",
       "mobile.png",
       "beginning.png",
     ],
